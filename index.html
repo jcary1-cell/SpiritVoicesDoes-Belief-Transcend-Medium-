@@ -451,7 +451,7 @@
                     <div class="absolute -right-10 -top-10 w-40 h-40 bg-purple-600/10 rounded-full blur-3xl pointer-events-none"></div>
 
                     <!-- Hidden Audio Tag pointing to GitHub file -->
-                    <audio id="suno-audio" src="you-dont-live-here-anymore.wav" preload="metadata"></audio>
+                    <audio id="suno-audio" src="you-dont-live-here-anymore.mp3" preload="metadata"></audio>
 
                     <!-- Track Header & Artwork Banner -->
                     <div class="flex items-center space-x-4 border-b border-stone-800/80 pb-4">
@@ -683,9 +683,18 @@
         let ambientGain = null;
         let isAudioPlaying = false;
         let visualizerAnimId = null;
+        let demoSynthInterval = null;
 
-        // Suno Song Player Logic
-        const sunoAudio = document.getElementById('suno-audio');
+        // Helper to ensure AudioContext is initialized & unlocked
+        async function ensureAudioContext() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+            return audioCtx;
+        }
 
         function initPlayerBars() {
             const container = document.getElementById('player-bars');
@@ -699,31 +708,46 @@
             }
         }
 
-        function toggleSunoTrack() {
+        async function toggleSunoTrack() {
             const playIcon = document.getElementById('play-icon');
             const pauseIcon = document.getElementById('pause-icon');
             const btnText = document.getElementById('play-btn-text');
             const dot = document.getElementById('player-status-dot');
             const statusText = document.getElementById('player-status-text');
+            const sunoAudio = document.getElementById('suno-audio');
 
             if (!sunoAudio) return;
 
-            if (sunoAudio.paused) {
-                sunoAudio.play().then(() => {
+            if (sunoAudio.paused && !sunoAudio.dataset.playingDemo) {
+                try {
+                    await ensureAudioContext();
+                    await sunoAudio.play();
                     playIcon.classList.add('hidden');
                     pauseIcon.classList.remove('hidden');
                     btnText.innerText = 'PAUSE TRACK';
                     dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse';
-                    statusText.innerText = 'Playing Audio Channeled via Suno';
+                    statusText.innerText = 'Playing: you-dont-live-here-anymore.mp3';
                     animatePlayerVisualizer(true);
-                }).catch(err => {
-                    // Fallback visual feedback if local file not found yet in repo
-                    dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400';
-                    statusText.innerText = 'Audio File: add "you-dont-live-here-anymore.wav" to repo';
+                } catch (err) {
+                    console.warn("Local audio file not found or autoplay restricted. Running Web Audio synth fallback:", err);
+                    await ensureAudioContext();
+                    sunoAudio.dataset.playingDemo = "true";
+                    playIcon.classList.add('hidden');
+                    pauseIcon.classList.remove('hidden');
+                    btnText.innerText = 'PAUSE DEMO';
+                    dot.className = 'w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse';
+                    statusText.innerText = 'Demo Synth Mode (Upload "you-dont-live-here-anymore.mp3" to repo)';
+                    
+                    playSynthDemoTrack(true);
                     animatePlayerVisualizer(true);
-                });
+                }
             } else {
-                sunoAudio.pause();
+                if (sunoAudio.dataset.playingDemo === "true") {
+                    sunoAudio.dataset.playingDemo = "";
+                    playSynthDemoTrack(false);
+                } else {
+                    sunoAudio.pause();
+                }
                 playIcon.classList.remove('hidden');
                 pauseIcon.classList.add('hidden');
                 btnText.innerText = 'PLAY TRACK';
@@ -731,6 +755,49 @@
                 statusText.innerText = 'Paused';
                 animatePlayerVisualizer(false);
             }
+        }
+
+        // Web Audio fallback synthesizer for testing track visualizer when mp3 is absent
+        function playSynthDemoTrack(start) {
+            if (demoSynthInterval) {
+                clearInterval(demoSynthInterval);
+                demoSynthInterval = null;
+            }
+
+            if (!start || !audioCtx) return;
+
+            const chords = [
+                [220.00, 261.63, 329.63], // Am
+                [174.61, 220.00, 261.63], // F
+                [130.81, 164.81, 196.00], // C
+                [196.00, 246.94, 293.66]  // G
+            ];
+            let chordIdx = 0;
+
+            const playStep = () => {
+                const now = audioCtx.currentTime;
+                const currentChord = chords[chordIdx % chords.length];
+                chordIdx++;
+
+                currentChord.forEach((freq) => {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now);
+
+                    gain.gain.setValueAtTime(0.04, now);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.8);
+
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+
+                    osc.start(now);
+                    osc.stop(now + 1.8);
+                });
+            };
+
+            playStep();
+            demoSynthInterval = setInterval(playStep, 2000);
         }
 
         function animatePlayerVisualizer(playing) {
@@ -754,11 +821,13 @@
         }
 
         function seekAudio(val) {
+            const sunoAudio = document.getElementById('suno-audio');
             if (!sunoAudio || !sunoAudio.duration) return;
             sunoAudio.currentTime = (val / 100) * sunoAudio.duration;
         }
 
         function setVolume(val) {
+            const sunoAudio = document.getElementById('suno-audio');
             if (!sunoAudio) return;
             sunoAudio.volume = val / 100;
         }
@@ -774,6 +843,7 @@
         window.addEventListener('DOMContentLoaded', () => {
             initPlayerBars();
 
+            const sunoAudio = document.getElementById('suno-audio');
             if (sunoAudio) {
                 sunoAudio.addEventListener('timeupdate', () => {
                     const current = sunoAudio.currentTime;
@@ -894,34 +964,30 @@
         }
 
         // Ambient Soundscape Web Audio Generator
-        function toggleAmbientAudio() {
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-
-            if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
+        async function toggleAmbientAudio() {
+            await ensureAudioContext();
 
             if (!isAudioPlaying) {
-                // Create ethereal background drone
                 ambientOsc = audioCtx.createOscillator();
                 const lfo = audioCtx.createOscillator();
                 ambientGain = audioCtx.createGain();
+                const lfoGain = audioCtx.createGain();
 
                 ambientOsc.type = 'sine';
-                ambientOsc.frequency.setValueAtTime(108, audioCtx.currentTime); // Deep spiritual frequency (432Hz harmonic)
+                ambientOsc.frequency.setValueAtTime(108, audioCtx.currentTime); // 108Hz deep spiritual drone
 
-                lfo.frequency.setValueAtTime(0.2, audioCtx.currentTime); // Slow breathing swell
-                const lfoGain = audioCtx.createGain();
-                lfoGain.gain.setValueAtTime(0.02, audioCtx.currentTime);
+                lfo.type = 'sine';
+                lfo.frequency.setValueAtTime(0.2, audioCtx.currentTime); // Breathing rate
+                lfoGain.gain.setValueAtTime(0.04, audioCtx.currentTime);
 
                 lfo.connect(lfoGain);
+                lfoGain.connect(ambientGain.gain);
+
+                ambientGain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+                ambientGain.gain.exponentialRampToValueAtTime(0.15, audioCtx.currentTime + 2);
+
                 ambientOsc.connect(ambientGain);
                 ambientGain.connect(audioCtx.destination);
-
-                ambientGain.gain.setValueAtTime(0.01, audioCtx.currentTime);
-                ambientGain.gain.exponentialRampToValueAtTime(0.05, audioCtx.currentTime + 3);
 
                 ambientOsc.start();
                 lfo.start();
@@ -931,24 +997,23 @@
                 document.getElementById('audio-icon-on').classList.remove('hidden');
                 document.getElementById('audio-label').innerText = "Audio Drone: Active";
             } else {
-                if (ambientGain) {
-                    ambientGain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 1);
+                if (ambientGain && audioCtx) {
+                    ambientGain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.8);
                     setTimeout(() => {
-                        if (ambientOsc) ambientOsc.stop();
+                        if (ambientOsc) {
+                            try { ambientOsc.stop(); } catch(e){}
+                        }
                         isAudioPlaying = false;
                         document.getElementById('audio-icon-off').classList.remove('hidden');
                         document.getElementById('audio-icon-on').classList.add('hidden');
                         document.getElementById('audio-label').innerText = "Audio Drone: Off";
-                    }, 1000);
+                    }, 800);
                 }
             }
         }
 
-        function playSpectralSoundSample() {
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            if (audioCtx.state === 'suspended') audioCtx.resume();
+        async function playSpectralSoundSample() {
+            await ensureAudioContext();
 
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
@@ -957,7 +1022,7 @@
             osc.frequency.setValueAtTime(216, audioCtx.currentTime);
             osc.frequency.exponentialRampToValueAtTime(432, audioCtx.currentTime + 1.5);
 
-            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
             gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 2.5);
 
             osc.connect(gain);
@@ -965,79 +1030,6 @@
 
             osc.start();
             osc.stop(audioCtx.currentTime + 2.5);
-        }
-
-        // Slide 4 Interactive Playground Synthesizer
-        function selectPrompt(promptKey) {
-            currentSelectedPrompt = promptKey;
-            document.querySelectorAll('.prompt-btn').forEach(btn => btn.classList.remove('border-amber-500', 'border-cyan-500', 'border-purple-500'));
-            event.currentTarget.classList.add('border-cyan-500');
-        }
-
-        function initVisualizerBars() {
-            const container = document.getElementById('visualizer-bars');
-            container.innerHTML = '';
-            for (let i = 0; i < 32; i++) {
-                const bar = document.createElement('div');
-                bar.className = 'w-1.5 bg-gradient-to-t from-cyan-600 to-purple-400 rounded-t transition-all duration-150';
-                bar.style.height = '8px';
-                container.appendChild(bar);
-            }
-        }
-
-        function synthesizeSpiritVoice() {
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            if (audioCtx.state === 'suspended') audioCtx.resume();
-
-            const statusText = document.getElementById('synth-status');
-            const displayText = document.getElementById('synth-display-text');
-            const bars = document.getElementById('visualizer-bars').children;
-
-            statusText.innerText = "Status: Synthesizing Latent Frequencies...";
-            displayText.innerText = "✦ Seance Active ✦";
-
-            // Web Audio Chords / Arpeggio
-            const now = audioCtx.currentTime;
-            const freqs = currentSelectedPrompt === '1869-hymn' ? [146.83, 174.61, 220.00, 293.66] :
-                          currentSelectedPrompt === 'latent-voice' ? [220.00, 277.18, 329.63, 440.00] :
-                          [130.81, 164.81, 196.00, 246.94];
-
-            freqs.forEach((f, idx) => {
-                const osc = audioCtx.createOscillator();
-                const gain = audioCtx.createGain();
-                
-                osc.type = idx % 2 === 0 ? 'sine' : 'triangle';
-                osc.frequency.setValueAtTime(f, now + idx * 0.2);
-
-                gain.gain.setValueAtTime(0.08, now + idx * 0.2);
-                gain.gain.exponentialRampToValueAtTime(0.0001, now + 3.5);
-
-                osc.connect(gain);
-                gain.connect(audioCtx.destination);
-
-                osc.start(now + idx * 0.2);
-                osc.stop(now + 3.5);
-            });
-
-            // Animate Visualizer Bars
-            let animCount = 0;
-            const interval = setInterval(() => {
-                for (let i = 0; i < bars.length; i++) {
-                    const h = Math.floor(Math.random() * 90) + 10;
-                    bars[i].style.height = `${h}px`;
-                }
-                animCount++;
-                if (animCount > 25) {
-                    clearInterval(interval);
-                    for (let i = 0; i < bars.length; i++) {
-                        bars[i].style.height = '8px';
-                    }
-                    statusText.innerText = "Status: Synthesis Complete";
-                    displayText.innerText = "Resonance Established";
-                }
-            }, 100);
         }
 
         // Poll voting simulation
